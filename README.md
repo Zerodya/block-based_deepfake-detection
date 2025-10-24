@@ -116,7 +116,7 @@ The dataset comprises a total of $72,334$ images, distributed as shown in the Ta
 |          | Others    | O | 9225 |        | 256 × 256; 512 × 512; 1024 × 1024             |
 
 
-The dataset is available at the following link: [link]() [DATASET AVAILABLE AS SOON AS THE PAPER IS PUBLISHED]
+The dataset is available at the following [link](https://studentiunict-my.sharepoint.com/:u:/g/personal/luca_guarnera_unict_it/EQCxR8r_TrVKvXq_Dkn2hmAB4DYTO-n_RDuwoIx4FS3HSA?e=n88isr)
 
 ## Citation
 ```
