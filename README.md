@@ -21,26 +21,29 @@ working_dir/
 ├── guidance.csv                     # CSV file for data processing guidance
 └── models/                          # Models and related files for the unbalancing approach
 ```
-This structure is recommended but not mandatory. You can specify alternative paths as needed.
-To use the suggested structure:
-
-  1. Create a file named `wd.py` inside `src/dfx/`
-  2. Add the following line to `wd.py`:
-  ```{python}
-  working_dir = '<your_working_directory_path>'
-  ```
-  3. Replace `<your_working_directory_path>` with your actual working directory path.
 
 ## Installation
   1. Clone the repository:
      ```{bash}
-     git clone git@github.com:opontorno/block-based_deepfake-detection.git
+     git clone https://github.com/mfs-iplab/block-based_deepfake-detection.git
      cd <repository_name>
      ```
-  2. Install the `dfx` package and dependencies:
+  2.   
+      - Create a file named `wd.py` inside `src/dfx/`
+      - Add the following line to `wd.py`:
+      ```{python}
+      working_dir = '<your_working_directory_path>'
+      ```
+      - Replace `<your_working_directory_path>` with your actual working directory path.
+  3. Install the `dfx` package and dependencies:
      ```{bash}
      pip install -e .
      pip install -r requirements.txt
+     ```
+  4. Use Rocm for AMD (optional):
+     ```
+     pip uninstall torch torchvision torchaudio -y
+     pip install torch torchvision torchaudio --index-url https://download.pytorch.   org/whl/rocm6.2.4
      ```
 
 
@@ -66,20 +69,31 @@ To use the suggested structure:
   ```
   2. Create a guidance CSV file:
   ```{bash}
-  python scripts/prep/make_guidance.csv --datasets_dir <your_data_dir> --saving_dir <your_save_path> --guidance_dir <your_guidance_path>
+  python scripts/prep/make_guidance.py --datasets_dir <path/to/datasets/> --saving_dir <path/to/outputs> --guidance_dir <path/to/working_dir/guidance.csv>
   ```
 
 ### Train Base Models
 Train the three base models:
 ```{python}
-python scripts/training/training_base-model.py --datasets_dir <your_data_dir> --main_class <main> --saving_path <your_save_path>
+python scripts/training/training-base_model.py --datasets_dir <path/to/datasets/> --main_class <main> --saving_dir <path/to/outputs> --backbone <backbone>
 ```
-Replace `<main>` with one of: 'dm_generated', 'gan_generated', or 'real'.
+Replace `<main>` with one of: `dm_generated`, `gan_generated`, or `real`.
+
+Replace `<backbone>` with one of:
+  - densenet: [`densenet121`, `densenet161`, `densenet169`, `densenet201`]
+  - inception: [`googlenet`, `inception_v3`]
+  - resnet1: [`resnet18`, `resnet34`, `resnet50`]
+  - resnet2: [`resnet101`, `resnet152`]
+  - resnext: [`resnext101`]
+  - efficient: [`efficientnet_b0`, `efficientnet_b4`]
+  - efficient_w: [`efficientnet_widese_b0`, `efficientnet_widese_b4`]
+  - vit_b: [`vit_b_16`, `vit_b_32`]
+  - vit_l: [`vit_l_16`, `vit_l_32`]
 
 ### Train Complete Model
 Train the complete model:
 ```
-python scripts/training/training_complete-model.py --datasets_dir <your_data_dir> --main_class <main> --saving_path <your_save_path>
+python scripts/training/training_complete-model.py --datasets_dir <your_data_dir> --main_class <main> --saving_path <your_save_path> --backbone <backbone>
 ```
 
 ## Inference
