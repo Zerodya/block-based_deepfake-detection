@@ -71,6 +71,7 @@ def training(model, loaders, epochs, optimizer, loss_fn, starting_epoch=0, sched
     if save_best_model and losses['val'][-1]<best_val_loss:
       best_val_loss=losses['val'][-1]
       best_epoch = epoch
+      os.makedirs(os.path.dirname(saving_path) or '.', exist_ok=True)
       torch.save(model.state_dict(), saving_path)
   ending_time = time.time()
   esecution_time = ending_time - staring_time

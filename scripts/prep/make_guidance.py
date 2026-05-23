@@ -1,4 +1,6 @@
-import os, random, csv
+import os
+import random
+import csv
 import argparse
 
 from dfx import get_path
@@ -17,22 +19,31 @@ def get_parser():
 
 def main(parser):
 
-    datasets_path = get_path('dataset') if parser.datasets_dir is not None else parser.datasets_dir
-    guidance_path = get_path('guidance') if parser.guidance_dir is not None else parser.guidance_dir
-    models_dir = get_path('models') if parser.saving_dir is not None else parser.saving_dir
+    datasets_path = get_path('dataset') if parser.datasets_dir is None else parser.datasets_dir
+    guidance_path = get_path('guidance') if parser.guidance_dir is None else parser.guidance_dir
+    models_dir = get_path('models') if parser.saving_dir is None else parser.saving_dir
 
     for folder in ['bm-dm', 'bm-gan', 'bm-real', 'complete']:
         folder_dir = os.path.join(models_dir, folder)
-        if not os.path.exists(folder_dir):
-            os.mkdir(folder_dir)
+        os.makedirs(folder_dir, exist_ok=True)
 
     with open(guidance_path[:-4]+'.txt', 'w') as f:
         for models_name in os.listdir(datasets_path):
             models_path = os.path.join(datasets_path, models_name)
+            
+            if models_name.startswith('.'):
+                continue
+                
             for architecture_name in os.listdir(models_path):
+                if architecture_name.startswith('.'):
+                    continue
                 architecture_path = os.path.join(models_path, architecture_name)
+                
                 for image in os.listdir(architecture_path):
+                    if image.startswith('.'):
+                        continue
                     image_path = os.path.join(architecture_path, image)
+                    
                     x = random.random()
                     label = int(x >= 0.4) + int(x >= 0.8)
                     f.write(f"{label} & {image_path} & {models_name}\n")
