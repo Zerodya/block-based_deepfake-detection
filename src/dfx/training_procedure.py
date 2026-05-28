@@ -9,7 +9,12 @@ from pathlib import Path
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, recall_score, precision_score, f1_score
 from IPython.display import clear_output
 
-dev = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+if torch.cuda.is_available():
+    dev = torch.device('cuda')
+elif torch.backends.mps.is_available():
+    dev = torch.device('mps')
+else:
+    dev = torch.device('cpu')
 
 def training(model, loaders, epochs, optimizer, loss_fn, starting_epoch=0, scheduler=None, mode_logs:str='online', model_name='', save_best_model=False, saving_path='', initial_val_to_beat=10):
   if save_best_model: assert saving_path.endswith('.pt')
