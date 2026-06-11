@@ -5,3 +5,4 @@ guidance.csv
 __pycache__/
 wd.py
 *-info
+gpucore*
