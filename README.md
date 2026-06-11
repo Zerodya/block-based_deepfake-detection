@@ -43,7 +43,7 @@ working_dir/
   4. Use Rocm for AMD (optional):
      ```
      pip uninstall torch torchvision torchaudio -y
-     pip install torch torchvision torchaudio --index-url https://download.pytorch.   org/whl/rocm6.2.4
+     pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.2.4
      ```
 
 
@@ -98,9 +98,29 @@ python scripts/training/training_complete-model.py --datasets_dir <your_data_dir
 
 ## Inference
 Test the complete model specifying the `backbone` type and, if any, the `model_path`:
-```{python}
+```
 python scripts/testing/testing_complete-models.py --backbone <backbone_type> --model_path <your_model_path> --test_raw True --datasets_dir <your_data_dir> --main_class <main> --saving_path <your_save_path>
 ```
+
+### Explainability
+Test a single image in the dataset:
+```
+python scripts/explainability/single_test.py \
+          --models_dir <your_models_dir> \
+          --approach_dir unbalancing-approach \
+          --backbone <backbone_type> \
+          --image_path "<your_image_path>"
+```
+
+Expected model paths:
+- `models_dir/bm-dm/effb0.pt`
+- `models_dir/bm-gan/effb0.pt`
+- `models_dir/bm-real/effb0.pt`
+
+Provides:
+- Base Model level: Grad-CAM and Score-CAM for each of the 3 Base Models (DM, GAN, REAL)
+- Complete Model level: Attribution of the final decision to each Base Model
+- Robustness analysis: Compare heatmaps before/after post-processing
 
 ## Dataset
 The dataset comprises a total of $72,334$ images, distributed as shown in the Table. The image sizes vary considerably, ranging from 216x216 pixels up to 1024x1024 pixels, thus offering a wide spectrum of resolutions for analysis. For each generative architecture, special attention was paid to the internal balancing of the corresponding subset of images. This balancing was pursued in terms of both semantic content and size in order to minimise potential bias and ensure a fair representation of the different types of visual input. All images are in PNG format.
