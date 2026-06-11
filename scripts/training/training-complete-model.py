@@ -8,6 +8,7 @@ from torch.utils.data import random_split, DataLoader
 from torch.optim import Adam
 from torch.optim.lr_scheduler import StepLR
 import argparse
+import os
 
 from dfx import get_path
 from dfx import (
@@ -21,6 +22,13 @@ from dfx import (
     get_trans
 )
 from dfx import training
+
+if torch.cuda.is_available():
+    dev = torch.device('cuda')
+elif torch.backends.mps.is_available():
+    dev = torch.device('mps')
+else:
+    dev = torch.device('cpu')
 
 def get_parser():
     parser = argparse.ArgumentParser()
@@ -48,6 +56,8 @@ def main(parser):
     datasets_path = get_path('dataset') if parser.datasets_dir is not None else parser.datasets_dir
     guidance_path = get_path('guidance') if parser.guidance_dir is not None else parser.guidance_dir
     models_dir = get_path('models') if parser.saving_dir is not None else parser.saving_dir
+
+    os.makedirs(models_dir + '/complete', exist_ok=True)
 
     conf = f'-b{parser.batch_size}-lr{parser.learning_rate}-wd{parser.weight_decay}-step{parser.scheduler_stepsize}-gamma{parser.scheduler_gamma}'
 
@@ -87,7 +97,7 @@ def main(parser):
             mode_logs=parser.mode_logs,
             model_name=backbone_name,
             save_best_model=True,
-            saving_path=models_dir+'/grid_complete_models/'+saved_backbone+conf+'.pt')
+            saving_path=models_dir+'/complete/'+saved_backbone+conf+'.pt')
     
 
 if __name__=='__main__':

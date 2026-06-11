@@ -75,9 +75,9 @@ def get_complete_model(backbone_name: str, models_dir:str):
     model_dm = backbone(backbone_name, pretrained=False, finetuning=True, num_classes=2)
     model_gan = backbone(backbone_name, pretrained=False, finetuning=True, num_classes=2)
     model_real = backbone(backbone_name, pretrained=False, finetuning=True, num_classes=2)
-    model_dm.load_state_dict(torch.load(models_dir+'/bm-dm/'+saved_model_name+'.pt'))
-    model_gan.load_state_dict(torch.load(models_dir+'/bm-gan/'+saved_model_name+'.pt'))
-    model_real.load_state_dict(torch.load(models_dir+'/bm-real/'+saved_model_name+'.pt'))
+    model_dm.load_state_dict(torch.load(models_dir+'/bm-dm/'+saved_model_name+'.pt', map_location='cpu'))
+    model_gan.load_state_dict(torch.load(models_dir+'/bm-gan/'+saved_model_name+'.pt', map_location='cpu'))
+    model_real.load_state_dict(torch.load(models_dir+'/bm-real/'+saved_model_name+'.pt', map_location='cpu'))
     model_dm.eval()
     model_gan.eval()
     model_real.eval()
@@ -86,7 +86,7 @@ def get_complete_model(backbone_name: str, models_dir:str):
     if backbone_name in model_families['inception']+model_families['resnet1']+model_families['resnet2']+model_families['resnext']: 
         for model in [model_dm, model_gan, model_real]: model.fc=nn.Identity()
     if backbone_name in model_families['efficient']+model_families['efficient_w']: 
-        for model in [model_dm, model_gan, model_real]: model.classifier.fc=nn.Identity()
+        for model in [model_dm, model_gan, model_real]: model.classifier[-1]=nn.Identity()
     if backbone_name in model_families['vit_b']+model_families['vit_l']: 
         for model in [model_dm, model_gan, model_real]: model.heads.head=nn.Identity()
     complete_model = completenn(model_dm, model_gan, model_real)

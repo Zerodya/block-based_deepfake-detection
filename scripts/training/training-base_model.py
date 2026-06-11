@@ -56,8 +56,8 @@ def main(parser):
 
     train, valid = random_split(dset, lengths=[.8,.2])
 
-    trainload = DataLoader(train, batch_size=batch_size, shuffle=True, num_workers=0)
-    validload = DataLoader(valid, batch_size=batch_size, shuffle=True, num_workers=0)
+    trainload = DataLoader(train, batch_size=batch_size, shuffle=True, num_workers=4)
+    validload = DataLoader(valid, batch_size=batch_size, shuffle=True, num_workers=4)
 
     loss=nn.CrossEntropyLoss()
 
