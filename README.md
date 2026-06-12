@@ -103,6 +103,8 @@ python scripts/testing/testing_complete-models.py --backbone <backbone_type> --m
 ```
 
 ### Explainability
+Compare heatmaps before/after post-processing using Grad-CAM and Score-CAM for each of the 3 Base Models (DM, GAN, REAL).
+
 Test a single image in the dataset:
 ```
 python scripts/explainability/single_test.py \
@@ -110,17 +112,24 @@ python scripts/explainability/single_test.py \
           --approach_dir unbalancing-approach \
           --backbone <backbone_type> \
           --image_path "<your_image_path>"
+          --test_dm_known "<dm_image_path>" \
+          --test_real_known "<real_image_path>"
+```
+Example usage:
+```
+python scripts/explainability/single_test.py \
+          --models_dir ../working_dir/models \
+          --approach_dir unbalancing-approach \
+          --backbone efficientnet_b0 \
+          --image_path "../working_dir/datasets/gan_generated/PROGAN/PROGAN_0001.png" \
+          --test_dm_known "../working_dir/datasets/dm_generated/STABLE DIFFUSION/STABLE DIFFUSION_0001.png" \
+          --test_real_known "../working_dir/datasets/real/REAL/REAL_0001.png"
 ```
 
 Expected model paths:
 - `models_dir/bm-dm/effb0.pt`
 - `models_dir/bm-gan/effb0.pt`
 - `models_dir/bm-real/effb0.pt`
-
-Provides:
-- Base Model level: Grad-CAM and Score-CAM for each of the 3 Base Models (DM, GAN, REAL)
-- Complete Model level: Attribution of the final decision to each Base Model
-- Robustness analysis: Compare heatmaps before/after post-processing
 
 ## Dataset
 The dataset comprises a total of $72,334$ images, distributed as shown in the Table. The image sizes vary considerably, ranging from 216x216 pixels up to 1024x1024 pixels, thus offering a wide spectrum of resolutions for analysis. For each generative architecture, special attention was paid to the internal balancing of the corresponding subset of images. This balancing was pursued in terms of both semantic content and size in order to minimise potential bias and ensure a fair representation of the different types of visual input. All images are in PNG format.
