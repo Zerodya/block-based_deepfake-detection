@@ -7,13 +7,11 @@ import matplotlib.pyplot as plt
 import sys
 import os
 import argparse
-import types
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 
-from dfx.architecture import completenn
-from dfx.import_classifiers import backbone
+from dfx.architecture import completenn, backbone
 from dfx.explainability import (
     CompleteModelExplainer,
     RobustnessAnalyzer,
@@ -35,7 +33,7 @@ from dfx.explainability import (
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description='DeepFeatureX Explainability Tool - Bypass Combiner',
+        description='DeepFeatureX Explainability Tool',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -43,16 +41,16 @@ Examples:
   python %(prog)s --models_dir ../working_dir/models --approach_dir unbalancing-approach \
       --backbone efficientnet_b0 --image_path path/to/image.png
 
-  # Empiric positive_idx test (recommended for first run)
-  python %(prog)s --models_dir ../working_dir/models --approach_dir unbalancing-approach \
-      --backbone efficientnet_b0 --image_path img.png \
-      --test_dm_known ../datasets/dm_generated/dm_001.png \
-      --test_real_known ../datasets/real/real_001.png
+  # Custom output directory
+  python %(prog)s --models_dir ../models --approach_dir my-approach \
+      --backbone resnet50 --image_path img.jpg --output_dir ./results
         """
     )
 
-    parser.add_argument('--models_dir', type=str, required=True)
-    parser.add_argument('--approach_dir', type=str, required=True)
+    parser.add_argument('--models_dir', type=str, required=True,
+                        help='Root directory where models are stored')
+    parser.add_argument('--approach_dir', type=str, required=True,
+                        help='Subdirectory with trained models (e.g., unbalancing-approach)')
     parser.add_argument('--backbone', type=str, required=True,
                         choices=['efficientnet_b0', 'efficientnet_b4',
                                  'efficientnet_widese_b0', 'efficientnet_widese_b4',
@@ -60,56 +58,45 @@ Examples:
                                  'resnext101',
                                  'densenet121', 'densenet161', 'densenet169', 'densenet201',
                                  'vit_b_16', 'vit_b_32', 'vit_l_16', 'vit_l_32'])
-    parser.add_argument('--image_path', type=str, required=True)
-    parser.add_argument('--output_dir', type=str, default='../explanation_results')
-    parser.add_argument('--positive_idx', type=int, default=1,
-                        help='Ositive class index in Base Models (0 or 1). '
-                             'Use --test_dm_known e --test_real_known to verify it.')
-    parser.add_argument('--test_dm_known', type=str, default=None,
-                        help='Known DM image for empiric positive_idx test')
-    parser.add_argument('--test_real_known', type=str, default=None,
-                        help='Known REAL image for empiric positive_idx test')
+    parser.add_argument('--image_path', type=str, required=True,
+                        help='Path to the test image')
+    parser.add_argument('--output_dir', type=str, default='../explanation_results',
+                        help='Output directory for results')
 
     return parser.parse_args()
 
 
 def load_base_model(backbone_name: str, model_path: str, device: torch.device):
+    """
+    Load Base Model without classification head (for feature extraction).
+    """
     model = backbone(backbone_name, pretrained=False, finetuning=True, num_classes=2)
     state_dict = torch.load(model_path, map_location=device, weights_only=False)
     model.load_state_dict(state_dict)
 
     if 'efficientnet' in backbone_name:
-        model.avgpool = nn.Identity()
-        model.classifier = nn.Identity()
+        model.classifier[-1] = nn.Identity()
     elif 'resnet' in backbone_name or 'resnext' in backbone_name:
-        model.avgpool = nn.Identity()
         model.fc = nn.Identity()
     elif 'densenet' in backbone_name:
-        model.avgpool = nn.Identity()
         model.classifier = nn.Identity()
     elif 'vit' in backbone_name:
-        model.heads = nn.Identity()
+        model.heads.head = nn.Identity()
 
     model = model.to(device)
     model.eval()
     return model
 
-
-def load_base_model_classifier(backbone_name: str, model_path: str, device: torch.device):
-    model = backbone(backbone_name, pretrained=False, finetuning=True, num_classes=2)
-    state_dict = torch.load(model_path, map_location=device, weights_only=False)
-    model.load_state_dict(state_dict)
-    model = model.to(device)
-    model.eval()
-    return model
 
 def load_complete_model_custom(
     backbone_name: str,
     models_dir: str,
     approach_dir: str,
-    device: torch.device,
-    positive_idx: int = 1
+    device: torch.device
 ):
+    """
+    Load complete DeepFeatureX model with trained combiner.
+    """
     saved_name_map = {
         'efficientnet_b0': 'effb0', 'efficientnet_b4': 'effb4',
         'efficientnet_widese_b0': 'effb0', 'efficientnet_widese_b4': 'effb4',
@@ -123,93 +110,38 @@ def load_complete_model_custom(
     }
     saved_name = saved_name_map.get(backbone_name, backbone_name)
 
-    dm_path = os.path.join(models_dir, approach_dir, 'dm_generated', f'{saved_name}.pt')
-    gan_path = os.path.join(models_dir, approach_dir, 'gan_generated', f'{saved_name}.pt')
-    real_path = os.path.join(models_dir, approach_dir, 'real', f'{saved_name}.pt')
+    dm_path = os.path.join(models_dir, approach_dir, 'bm-dm', f'{saved_name}.pt')
+    gan_path = os.path.join(models_dir, approach_dir, 'bm-gan', f'{saved_name}.pt')
+    real_path = os.path.join(models_dir, approach_dir, 'bm-real', f'{saved_name}.pt')
 
     for path, name in [(dm_path, 'DM'), (gan_path, 'GAN'), (real_path, 'REAL')]:
         if not os.path.exists(path):
             raise FileNotFoundError(f"{name} model not found: {path}")
         print(f"    Found {name} model: {path}")
 
-    # Load versions WITH classifier (for prediction)
-    print("    Loading DM Base Model (classifier)...")
-    model_dm_cls = load_base_model_classifier(backbone_name, dm_path, device)
-    print("    Loading GAN Base Model (classifier)...")
-    model_gan_cls = load_base_model_classifier(backbone_name, gan_path, device)
-    print("    Loading REAL Base Model (classifier)...")
-    model_real_cls = load_base_model_classifier(backbone_name, real_path, device)
+    print("    Loading DM Base Model...")
+    model_dm = load_base_model(backbone_name, dm_path, device)
+    print("    Loading GAN Base Model...")
+    model_gan = load_base_model(backbone_name, gan_path, device)
+    print("    Loading REAL Base Model...")
+    model_real = load_base_model(backbone_name, real_path, device)
 
-    # Load versions WITHOUT classifier (for heatmap)
-    print("    Loading DM Base Model (feature extractor)...")
-    model_dm_feat = load_base_model(backbone_name, dm_path, device)
-    print("    Loading GAN Base Model (feature extractor)...")
-    model_gan_feat = load_base_model(backbone_name, gan_path, device)
-    print("    Loading REAL Base Model (feature extractor)...")
-    model_real_feat = load_base_model(backbone_name, real_path, device)
+    # Create complete model
+    complete = completenn(model_dm, model_gan, model_real)
 
-    # ========================================================================
-    # COMBINER BYPASS
-    # ========================================================================
+    # Load trained combiner weights
+    combiner_path = os.path.join(models_dir, approach_dir, 'complete', f'{saved_name}.pt')
+    if os.path.exists(combiner_path):
+        combiner_state = torch.load(combiner_path, map_location=device, weights_only=False)
+        complete.load_state_dict(combiner_state)
+        print(f"    Loaded trained combiner: {combiner_path}")
+    else:
+        raise FileNotFoundError(f"Trained combiner not found: {combiner_path}")
 
-    # 1. Creates completenn with feature extractors (as in original code)
-    complete = completenn(model_dm_feat, model_gan_feat, model_real_feat)
     complete = complete.to(device)
-
-    # 2. Adds binary classifiers as attributes of completenn
-    complete.dm_cls = model_dm_cls
-    complete.gan_cls = model_gan_cls
-    complete.real_cls = model_real_cls
-    complete.positive_idx = positive_idx
-
-    # 3. Overrides forward with the bypass
-    def bypass_forward(self, x):
-        logit_dm = self.dm_cls(x)[:, self.positive_idx]
-        logit_gan = self.gan_cls(x)[:, self.positive_idx]
-        logit_real = self.real_cls(x)[:, self.positive_idx]
-        return torch.stack([logit_dm, logit_gan, logit_real], dim=1)
-
-    complete.forward = types.MethodType(bypass_forward, complete)
     complete.eval()
 
     return complete
-
-
-def test_positive_idx(model_dm_cls, model_gan_cls, model_real_cls,
-                      img_dm_path, img_real_path, device):
-    transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-
-    def get_probs(model, path):
-        img = Image.open(path).convert('RGB')
-        t = transform(img).unsqueeze(0).to(device)
-        with torch.no_grad():
-            out = torch.softmax(model(t), dim=1)
-        return out[0].cpu().numpy()
-
-    print("\n" + "="*60)
-    print("Empiric positive_idx test...")
-    print("="*60)
-
-    for name, model in [('DM', model_dm_cls), ('GAN', model_gan_cls), ('REAL', model_real_cls)]:
-        p_dm_img = get_probs(model, img_dm_path)
-        p_real_img = get_probs(model, img_real_path)
-
-        print(f"\n{name} Base Model:")
-        print(f"  On DM image:     idx0={p_dm_img[0]:.4f}, idx1={p_dm_img[1]:.4f}")
-        print(f"  On REAL image:   idx0={p_real_img[0]:.4f}, idx1={p_real_img[1]:.4f}")
-
-        if name == 'DM':
-            guess = 0 if p_dm_img[0] > p_dm_img[1] else 1
-            print(f"  -> DM model: classe {guess} = DM (probabilmente)")
-        elif name == 'REAL':
-            guess = 0 if p_real_img[0] > p_real_img[1] else 1
-            print(f"  -> REAL model: classe {guess} = REAL (probabilmente)")
-
-    print("="*60)
 
 
 def main():
@@ -223,7 +155,6 @@ def main():
     BACKBONE = args.backbone
     IMAGE_PATH = args.image_path
     OUTPUT_DIR = args.output_dir
-    POSITIVE_IDX = args.positive_idx
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -231,33 +162,15 @@ def main():
     print(f"Using device: {device}")
 
     # ========================================================================
-    # 1. LOAD MODEL WITH BYPASS
+    # 1. LOAD MODEL
     # ========================================================================
-    print("\n[1] Loading DeepFeatureX model (BYPASS mode)...")
+    print("\n[1] Loading DeepFeatureX model...")
     print(f"    Models dir: {MODELS_DIR}")
     print(f"    Approach: {APPROACH_DIR}")
     print(f"    Backbone: {BACKBONE}")
-    print(f"    positive_idx: {POSITIVE_IDX}")
 
-    model = load_complete_model_custom(BACKBONE, MODELS_DIR, APPROACH_DIR, device, POSITIVE_IDX)
-    print(f"    Bypass model loaded successfully!")
-
-    # Test empirico positive_idx se richiesto
-    if args.test_dm_known and args.test_real_known:
-        # Carica temporaneamente i modelli con classificatore per il test
-        saved_name_map = {
-            'efficientnet_b0': 'effb0', 'efficientnet_b4': 'effb4',
-            'resnet50': 'res50', 'densenet121': 'dense121',
-        }
-        saved_name = saved_name_map.get(BACKBONE, BACKBONE)
-        dm_path = os.path.join(MODELS_DIR, APPROACH_DIR, 'dm_generated', f'{saved_name}.pt')
-        gan_path = os.path.join(MODELS_DIR, APPROACH_DIR, 'gan_generated', f'{saved_name}.pt')
-        real_path = os.path.join(MODELS_DIR, APPROACH_DIR, 'real', f'{saved_name}.pt')
-
-        m_dm = load_base_model_classifier(BACKBONE, dm_path, device)
-        m_gan = load_base_model_classifier(BACKBONE, gan_path, device)
-        m_real = load_base_model_classifier(BACKBONE, real_path, device)
-        test_positive_idx(m_dm, m_gan, m_real, args.test_dm_known, args.test_real_known, device)
+    model = load_complete_model_custom(BACKBONE, MODELS_DIR, APPROACH_DIR, device)
+    print(f"    Complete model loaded successfully!")
 
     # ========================================================================
     # 2. LOAD AND PREPROCESS IMAGE
@@ -485,7 +398,7 @@ def main():
     # 10. FINAL SUMMARY
     # ========================================================================
     print("\n" + "="*70)
-    print("EXPLANATION COMPLETE (BYPASS MODE)")
+    print("EXPLANATION COMPLETE")
     print("="*70)
     print(f"Results saved in: {OUTPUT_DIR}/")
     print("\nGenerated files:")
