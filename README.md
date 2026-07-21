@@ -49,25 +49,40 @@ working_dir/
 
 ## Train the models
 ### Data preparation
-  1. Organize your data following this structure:
+  1. Download this dataset of real images: https://www.kaggle.com/c/imagenet-object-localization-challenge
+
+  - 1a. Run `scripts/prep/prepare_real_dataset.py` like this:
+
+    ```py
+    python scripts/prep/prepare_real_dataset.py \
+    --src imagenet-object-localization-challenge/ILSVRC/Data/CLS-LOC/train/ \
+    --dest working_dir/datasets/real/REAL \
+    -n 5000 \
+    ```
+    This will take 5000 random images from that dataset, crop them to 1024x1024 and save them in the working_dir.
+
+  2. Install [ComfyUI](https://comfy.org/) to generate pictures.
+
+  - 2a. Create a new ComfyUI project. 
+
+  - 2b. Download a Diffusion model like [this one](huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors) and place it in the ComfyUI directory inside `models/checkpoints/`.
+  
+  - 2c. With ComfyUI running and accessible at `http:/127.0.0.1:8188`, run this script:
+
+    ```py
+    python scripts/comfyui/comfyui_generate_dataset.py \
+    ```
+    This will generate 5000 pictures with a size of 1024x1024 following random prompts and modifications. 
+
+  3. Your data should follow this structure:
   ```
-    Datasets/
-    ├── gan_generated/
-    │   ├── AttGAN/
-    │   ├── BigGAN/
-    │   ├── CycleGAN/
-    │   ├── GauGAN/
-    │   └── .../
+    datasets/
     ├── dm_generated/
-    │   ├── DALL-E 2/
-    │   ├── DALL-E MINI/
-    │   ├── Glide/
-    │   ├── Latent Diffusion/
-    │   └── .../
+    │   ├── STABLE DIFFUSION
     └── real/
-        └── real/
+        └── REAL
   ```
-  2. Create a guidance CSV file:
+  4. Create a guidance CSV file:
   ```{bash}
   python scripts/prep/make_guidance.py --datasets_dir <path/to/datasets/> --saving_dir <path/to/outputs> --guidance_dir <path/to/working_dir/guidance.csv>
   ```
@@ -103,7 +118,7 @@ python scripts/testing/testing_complete-models.py --backbone <backbone_type> --m
 ```
 
 ### Explainability
-Compare heatmaps before/after post-processing using Grad-CAM and Score-CAM for each of the 3 Base Models (DM, GAN, REAL).
+Compare heatmaps before/after post-processing using Grad-CAM and Score-CAM.
 
 Test a single image in the dataset:
 ```
@@ -112,54 +127,20 @@ python scripts/explainability/single_test.py \
           --approach_dir unbalancing-approach \
           --backbone <backbone_type> \
           --image_path "<your_image_path>"
-          --test_dm_known "<dm_image_path>" \
-          --test_real_known "<real_image_path>"
 ```
 Example usage:
 ```
 python scripts/explainability/single_test.py \
           --models_dir ../working_dir/models \
           --approach_dir unbalancing-approach \
-          --backbone efficientnet_b0 \
-          --image_path "../working_dir/datasets/gan_generated/PROGAN/PROGAN_0001.png" \
-          --test_dm_known "../working_dir/datasets/dm_generated/STABLE DIFFUSION/STABLE DIFFUSION_0001.png" \
-          --test_real_known "../working_dir/datasets/real/REAL/REAL_0001.png"
+          --backbone resnet50 \
+          --image_path "../working_dir/datasets/dm_generated/STABLE DIFFUSION/0001.png" \
 ```
 
-Expected model paths:
-- `models_dir/bm-dm/effb0.pt`
-- `models_dir/bm-gan/effb0.pt`
-- `models_dir/bm-real/effb0.pt`
-
-## Dataset
-The dataset comprises a total of $72,334$ images, distributed as shown in the Table. The image sizes vary considerably, ranging from 216x216 pixels up to 1024x1024 pixels, thus offering a wide spectrum of resolutions for analysis. For each generative architecture, special attention was paid to the internal balancing of the corresponding subset of images. This balancing was pursued in terms of both semantic content and size in order to minimise potential bias and ensure a fair representation of the different types of visual input. All images are in PNG format.
-
-| Nature | Architecture   | Type | # Images | Total  | Different Sizes                               |
-|--------|----------------|------|----------|--------|-----------------------------------------------|
-| **GAN**| AttGAN     | FO   | 6005     |        | 256 × 256                                     |
-|        | BigGAN      | O    | 2600     |        | 256 × 256                                     |
-|        | CycleGAN   | FO   | 1047     |        | 256 × 256; 512 × 512                          |
-|        | GauGAN     | O    | 4000     |        | 256 × 256; 512 × 512                          |
-|        | GDWCT       | O    | 3367     | 37.572 | 216 × 216                                     |
-|        | ProGAN     | O    | 1000     |        | 256 × 256; 512 × 512                          |
-|        | StarGAN     | F    | 6848     |        | 256 × 256                                     |
-|        | StyleGAN   | O    | 4705     |        | 256 × 256; 512 × 512                          |
-|        | StyleGAN2  | FO   | 7000     |        | 256 × 256; 512 × 512; 1024 × 1024             |
-|        | StyleGAN3  | F    | 1000     |        | 256 × 256; 512 × 512; 1024 × 1024             |
-| **DM** | DALL-E 2   | FO   | 3421     |        | 512 × 512; 1024 × 1024                        |
-|        | DALL-E MINI    | O    | 1000     |        | 256 × 256                                     |
-|        | Glide     | O    | 2000     | 15.421 | 256 × 256; 512 × 512                          |
-|        | Latent Diffusion  | FO | 4000 |      | 256 × 256; 512 × 512                          |
-|        | Stable Diffusion      | FO | 5000 |      | 256 × 256; 512 × 512                          |
-
-| Nature | Sources   | Type | # Images | Total  | Different Sizes                               |
-|--------|----------------|------|----------|--------|-----------------------------------------------|
-| **REAL** | CelebA   | F    | 5135     |        | 178 × 218                                     |
-|          | FFHQ     | F    | 4981     | 19341  | 1024 × 1024                                   |
-|          | Others    | O | 9225 |        | 256 × 256; 512 × 512; 1024 × 1024             |
-
-
-The dataset is available at the following [link](https://studentiunict-my.sharepoint.com/:u:/g/personal/luca_guarnera_unict_it/EQCxR8r_TrVKvXq_Dkn2hmAB4DYTO-n_RDuwoIx4FS3HSA?e=n88isr)
+Expected model paths example:
+- `models_dir/unbalancing-approach/dm_generated/res50.pt`
+- `models_dir/unbalancing-approach/real/res50.pt`
+- `models_dir/unbalancing-approach/complete/res50.pt`
 
 ## Citation
 ```
