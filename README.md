@@ -124,17 +124,16 @@ Test a single image in the dataset:
 ```
 python scripts/explainability/single_test.py \
           --models_dir <your_models_dir> \
-          --approach_dir unbalancing-approach \
           --backbone <backbone_type> \
           --image_path "<your_image_path>"
 ```
-Example usage:
+Test a subset of images:
 ```
-python scripts/explainability/single_test.py \
-          --models_dir ../working_dir/models \
-          --approach_dir unbalancing-approach \
-          --backbone resnet50 \
-          --image_path "../working_dir/datasets/dm_generated/STABLE DIFFUSION/0001.png" \
+python scripts/explainability/batch_test.py \
+          --models_dir <your_models_dir> \
+          --backbone <backbone_type> \
+          --dataset_dir "<your_dataset_dir>" \
+          --num_images 100
 ```
 
 Expected model paths example:
