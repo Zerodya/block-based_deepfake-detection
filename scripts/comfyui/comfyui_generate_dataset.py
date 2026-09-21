@@ -1,18 +1,4 @@
 #!/usr/bin/env python3
-"""
-ComfyUI Image Generation + Real-World Augmentation Pipeline
-Generates 5000 diverse images via ComfyUI API with automatic augmentations.
-
-Requirements:
-    pip install requests Pillow numpy websocket-client
-
-Setup:
-    1. Start ComfyUI server: python main.py
-    2. Place your model in models/checkpoints/
-    3. Run: python comfyui_generate_dataset.py
-"""
-
-import os
 import io
 import json
 import random
@@ -21,8 +7,7 @@ import requests
 import time
 from pathlib import Path
 from datetime import datetime
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageOps
-import numpy as np
+from PIL import Image
 import websocket
 
 # ========================= CONFIGURATION =========================
@@ -34,11 +19,10 @@ CLIENT_ID = str(uuid.uuid4())
 # Output directories
 DATASET_DIR = Path("dataset")
 GENERATED_DIR = DATASET_DIR / "generated"
-AUGMENTED_DIR = DATASET_DIR / "augmented"
 METADATA_PATH = DATASET_DIR / "metadata.jsonl"
 
-# How many base images to generate
-NUM_BASE_IMAGES = 5000
+# How many images to generate
+NUM_IMAGES = 5000
 
 # Image dimensions
 WIDTH = 1024
@@ -49,25 +33,6 @@ SAMPLER_STEPS = 30
 SAMPLER_CFG = 7.5
 SAMPLER_NAME = "euler_ancestral"
 SAMPLER_SCHEDULER = "normal"
-
-# Augmentation probabilities (0.0 - 1.0)
-AUGMENTATION_CONFIG = {
-    "random_crop": 0.7,
-    "resize_distortion": 0.6,
-    "jpeg_compression": 0.8,
-    "meme_text": 0.4,
-    "social_media_caption": 0.3,
-    "brightness_contrast": 0.7,
-    "blur": 0.5,
-    "noise": 0.4,
-    "rotation": 0.3,
-    "watermark": 0.3,
-    "color_tint": 0.4,
-    "vignette": 0.2,
-    "overlay_emoji_sticker": 0.2,
-    "grayscale": 0.15,
-    "saturation_boost": 0.25,
-}
 
 # ========================= DIVERSE PROMPTS =========================
 PROMPTS = [
@@ -172,13 +137,6 @@ PROMPTS = [
 ]
 
 NEGATIVE_PROMPT = "blurry, low quality, distorted, deformed, ugly, bad anatomy, watermark, signature, text, logo, cartoon, anime, illustration, painting, drawing, sketch, 3d render, cgi, plastic, doll, oversaturated, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, extra limbs, extra arms, extra legs, malformed limbs, fused fingers, too many fingers, long neck, cross-eyed, polar lowres, bad face"
-
-# Meme text options
-MEME_TOP_TEXTS = ["WHEN YOU", "NO ONE:", "ME:", "POV:", "MY FACE WHEN", "THAT MOMENT", "EVERYONE:", "WAIT...", "LITERALLY ME"]
-MEME_BOTTOM_TEXTS = ["REALIZE IT'S MONDAY", "SEE THE BILL", "CHECK THE TIME", "FINALLY UNDERSTAND", "FORGET TO SAVE", "SEE THE EMAIL", "TRY TO ADULT", "REMEMBER THE DEADLINE", "OPEN THE FRIDGE"]
-CAPTIONS = ["Living my best life ✨", "No filter needed", "Mood", "Vibes", "Just another Tuesday", "Couldn't resist posting this", "Thoughts?", "Caught this moment", "Unreal view", "This happened today"]
-WATERMARKS = ["@user123", "photography_by_me", "shot_on_iphone", "no copyright", "insta_dump", "vsco", "tumblr_2024", "my_aesthetic"]
-EMOJI_STICKERS = ["🔥", "✨", "😂", "❤️", "👀", "🙌", "💯", "🤔", "👍", "🎉"]
 
 # ========================= COMFYUI WORKFLOW =========================
 
@@ -346,8 +304,8 @@ def get_image(filename, subfolder="", folder_type="output"):
     return Image.open(io.BytesIO(resp.content)).convert("RGB")
 
 def generate_image(prompt, idx, workflow_template, ws):
-    """Generate an image via ComfyUI and return PIL Image."""
-    print(f"[GEN {idx:04d}/5000] {prompt[:60]}...")
+    """Generate an image via ComfyUI and return PIL Image (pure, no augmentations)."""
+    print(f"[GEN {idx:04d}/{NUM_IMAGES}] {prompt[:60]}...")
     seed = random.randint(1, 2**32 - 1)
     workflow = patch_workflow(workflow_template, prompt, seed)
 
@@ -387,264 +345,10 @@ def generate_image(prompt, idx, workflow_template, ws):
         print(f"[ERROR] Failed to fetch image: {e}")
         return None
 
-# ========================= AUGMENTATIONS (FIXED) =========================
-
-def get_font(size=30):
-    font_paths = [
-        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-        "/System/Library/Fonts/Helvetica.ttc",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "arialbd.ttf",
-        "/Windows/Fonts/arialbd.ttf",
-    ]
-    for fp in font_paths:
-        try:
-            return ImageFont.truetype(fp, size)
-        except Exception:
-            continue
-    return ImageFont.load_default()
-
-def apply_random_crop(img):
-    w, h = img.size
-    crop_ratio = random.uniform(0.6, 0.9)
-    new_w, new_h = int(w * crop_ratio), int(h * crop_ratio)
-    left = random.randint(0, w - new_w)
-    top = random.randint(0, h - new_h)
-    return img.crop((left, top, left + new_w, top + new_h))
-
-def apply_resize_distortion(img):
-    w, h = img.size
-    scale = random.uniform(0.3, 0.7)
-    small = img.resize((int(w*scale), int(h*scale)), Image.Resampling.LANCZOS)
-    return small.resize((w, h), Image.Resampling.NEAREST)
-
-def apply_jpeg_compression(img):
-    quality = random.randint(30, 75)
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=quality, optimize=False)
-    buf.seek(0)
-    return Image.open(buf).convert("RGB")
-
-def add_meme_text(img):
-    draw = ImageDraw.Draw(img)
-    font = get_font(size=int(min(img.size) * 0.08))
-    top_text = random.choice(MEME_TOP_TEXTS).upper()
-    bottom_text = random.choice(MEME_BOTTOM_TEXTS).upper()
-
-    def draw_outlined_text(draw, pos, text, font, fill="white", outline="black"):
-        x, y = pos
-        for dx in [-2, -1, 0, 1, 2]:
-            for dy in [-2, -1, 0, 1, 2]:
-                if dx == 0 and dy == 0:
-                    continue
-                draw.text((x+dx, y+dy), text, font=font, fill=outline)
-        draw.text((x, y), text, font=font, fill=fill)
-
-    bbox = draw.textbbox((0, 0), top_text, font=font)
-    tw = bbox[2] - bbox[0]
-    th = bbox[3] - bbox[1]
-    draw_outlined_text(draw, ((img.width - tw)//2, int(img.height*0.02)), top_text, font)
-
-    bbox = draw.textbbox((0, 0), bottom_text, font=font)
-    tw = bbox[2] - bbox[0]
-    draw_outlined_text(draw, ((img.width - tw)//2, img.height - th - int(img.height*0.04)), bottom_text, font)
-    return img
-
-def add_social_media_caption(img):
-    draw = ImageDraw.Draw(img)
-    caption = random.choice(CAPTIONS)
-    font = get_font(size=int(min(img.size) * 0.045))
-    bbox = draw.textbbox((0, 0), caption, font=font)
-    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    x = random.randint(10, max(10, img.width - tw - 10))
-    y = random.randint(10, max(10, img.height - th - 10))
-    overlay = Image.new("RGBA", img.size, (255, 255, 255, 0))
-    overlay_draw = ImageDraw.Draw(overlay)
-    padding = 6
-    overlay_draw.rectangle([x-padding, y-padding, x+tw+padding, y+th+padding], fill=(0,0,0,120))
-    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
-    draw = ImageDraw.Draw(img)
-    draw.text((x, y), caption, fill=(255, 255, 255), font=font)
-    return img
-
-def apply_brightness_contrast(img):
-    factor_b = random.uniform(0.7, 1.4)
-    factor_c = random.uniform(0.7, 1.5)
-    img = ImageEnhance.Brightness(img).enhance(factor_b)
-    img = ImageEnhance.Contrast(img).enhance(factor_c)
-    return img
-
-def apply_blur(img):
-    r = random.random()
-    if r < 0.5:
-        radius = random.uniform(0.5, 2.5)
-        return img.filter(ImageFilter.GaussianBlur(radius=radius))
-    else:
-        radius = random.randint(2, 5)
-        return img.filter(ImageFilter.BoxBlur(radius))
-
-def apply_noise(img):
-    np_img = np.array(img).astype(np.float32)
-    noise = np.random.normal(0, random.uniform(5, 20), np_img.shape)
-    np_img = np.clip(np_img + noise, 0, 255).astype(np.uint8)
-    return Image.fromarray(np_img)
-
-def apply_rotation(img):
-    angle = random.uniform(-15, 15)
-    return img.rotate(angle, expand=True, fillcolor=(random.randint(0,255),)*3)
-
-def add_watermark(img):
-    draw = ImageDraw.Draw(img)
-    text = random.choice(WATERMARKS)
-    font = get_font(size=int(min(img.size) * 0.035))
-    bbox = draw.textbbox((0, 0), text, font=font)
-    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    x = img.width - tw - random.randint(5, 30)
-    y = img.height - th - random.randint(5, 30)
-    overlay = Image.new("RGBA", img.size, (255, 255, 255, 0))
-    overlay_draw = ImageDraw.Draw(overlay)
-    overlay_draw.text((x, y), text, fill=(255, 255, 255, 90), font=font)
-    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
-    return img
-
-def apply_color_tint(img):
-    """Apply color tint - FIXED to always work with RGB images."""
-    r = random.random()
-    if r < 0.33:
-        # Sepia - apply to RGB directly
-        np_img = np.array(img).astype(np.float32)
-        sepia = np.array([
-            [0.393, 0.769, 0.189],
-            [0.349, 0.686, 0.168],
-            [0.272, 0.534, 0.131]
-        ])
-        np_img = np.clip(np_img @ sepia.T, 0, 255).astype(np.uint8)
-        return Image.fromarray(np_img)
-    elif r < 0.66:
-        # Warm tint
-        r_chan, g_chan, b_chan = img.split()
-        r_chan = r_chan.point(lambda i: min(255, int(i * 1.15)))
-        b_chan = b_chan.point(lambda i: int(i * 0.85))
-        return Image.merge("RGB", (r_chan, g_chan, b_chan))
-    else:
-        # Cool tint
-        r_chan, g_chan, b_chan = img.split()
-        b_chan = b_chan.point(lambda i: min(255, int(i * 1.15)))
-        r_chan = r_chan.point(lambda i: int(i * 0.9))
-        return Image.merge("RGB", (r_chan, g_chan, b_chan))
-
-def apply_vignette(img):
-    w, h = img.size
-    x = np.linspace(-1, 1, w)
-    y = np.linspace(-1, 1, h)
-    X, Y = np.meshgrid(x, y)
-    R = np.sqrt(X**2 + Y**2)
-    strength = random.uniform(0.3, 0.8)
-    mask = 1 - np.clip(R * strength, 0, 1)
-    mask = (mask * 255).astype(np.uint8)
-    mask_img = Image.fromarray(mask).convert("L")
-    dark = ImageEnhance.Brightness(img).enhance(0.4)
-    return Image.composite(img, dark, mask_img)
-
-def add_overlay_emoji_sticker(img):
-    draw = ImageDraw.Draw(img)
-    emoji = random.choice(EMOJI_STICKERS)
-    font = get_font(size=int(min(img.size) * 0.15))
-    bbox = draw.textbbox((0, 0), emoji, font=font)
-    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    x = random.randint(0, max(0, img.width - tw))
-    y = random.randint(0, max(0, img.height - th))
-    draw.text((x, y), emoji, font=font)
-    return img
-
-def apply_grayscale(img):
-    return ImageOps.grayscale(img).convert("RGB")
-
-def apply_saturation_boost(img):
-    factor = random.uniform(1.3, 2.0)
-    return ImageEnhance.Color(img).enhance(factor)
-
-def augment_image(img):
-    """Apply a random subset of augmentations to simulate real-world sharing.
-    FIXED: Always resize to target size after rotation to prevent dimension mismatches.
-    """
-    applied = []
-    target_size = (WIDTH, HEIGHT)
-
-    # Start with resize to ensure consistent dimensions
-    img = img.resize(target_size, Image.Resampling.LANCZOS)
-
-    if random.random() < AUGMENTATION_CONFIG["random_crop"]:
-        img = apply_random_crop(img)
-        applied.append("random_crop")
-
-    if random.random() < AUGMENTATION_CONFIG["resize_distortion"]:
-        img = apply_resize_distortion(img)
-        applied.append("resize_distortion")
-
-    if random.random() < AUGMENTATION_CONFIG["rotation"]:
-        img = apply_rotation(img)
-        applied.append("rotation")
-        # CRITICAL FIX: Resize back to target after rotation to prevent dimension mismatch
-        img = img.resize(target_size, Image.Resampling.LANCZOS)
-
-    if random.random() < AUGMENTATION_CONFIG["brightness_contrast"]:
-        img = apply_brightness_contrast(img)
-        applied.append("brightness_contrast")
-
-    if random.random() < AUGMENTATION_CONFIG["blur"]:
-        img = apply_blur(img)
-        applied.append("blur")
-
-    if random.random() < AUGMENTATION_CONFIG["noise"]:
-        img = apply_noise(img)
-        applied.append("noise")
-
-    if random.random() < AUGMENTATION_CONFIG["color_tint"]:
-        img = apply_color_tint(img)
-        applied.append("color_tint")
-
-    if random.random() < AUGMENTATION_CONFIG["saturation_boost"]:
-        img = apply_saturation_boost(img)
-        applied.append("saturation_boost")
-
-    if random.random() < AUGMENTATION_CONFIG["grayscale"]:
-        img = apply_grayscale(img)
-        applied.append("grayscale")
-
-    if random.random() < AUGMENTATION_CONFIG["vignette"]:
-        img = apply_vignette(img)
-        applied.append("vignette")
-
-    if random.random() < AUGMENTATION_CONFIG["watermark"]:
-        img = add_watermark(img)
-        applied.append("watermark")
-
-    if random.random() < AUGMENTATION_CONFIG["overlay_emoji_sticker"]:
-        img = add_overlay_emoji_sticker(img)
-        applied.append("overlay_emoji_sticker")
-
-    if random.random() < AUGMENTATION_CONFIG["meme_text"]:
-        img = add_meme_text(img)
-        applied.append("meme_text")
-
-    if random.random() < AUGMENTATION_CONFIG["social_media_caption"]:
-        img = add_social_media_caption(img)
-        applied.append("social_media_caption")
-
-    if random.random() < AUGMENTATION_CONFIG["jpeg_compression"]:
-        img = apply_jpeg_compression(img)
-        applied.append("jpeg_compression")
-
-    # Final resize to ensure consistent output dimensions
-    img = img.resize(target_size, Image.Resampling.LANCZOS)
-    return img, applied
-
 # ========================= MAIN =========================
 
 def ensure_dirs():
     GENERATED_DIR.mkdir(parents=True, exist_ok=True)
-    AUGMENTED_DIR.mkdir(parents=True, exist_ok=True)
 
 def main():
     ensure_dirs()
@@ -670,40 +374,28 @@ def main():
 
     workflow_template = build_workflow()
     metadata = []
-    shuffled_prompts = PROMPTS.copy()
-    random.shuffle(shuffled_prompts)
 
-    for i in range(NUM_BASE_IMAGES):
-        prompt = shuffled_prompts[i % len(shuffled_prompts)]
-        if i > 0 and i % len(shuffled_prompts) == 0:
-            random.shuffle(shuffled_prompts)
+    for i in range(NUM_IMAGES):
+        # Prompt chosen purely at random (with replacement) for each image
+        prompt = random.choice(PROMPTS)
 
-        base_img = generate_image(prompt, i, workflow_template, ws)
-        if base_img is None:
+        img = generate_image(prompt, i, workflow_template, ws)
+        if img is None:
             continue
 
-        base_name = f"gen_{i:04d}"
-        base_path = GENERATED_DIR / f"{base_name}_base.png"
-        base_img.save(base_path)
+        img_name = f"gen_{i:04d}.png"
+        img_path = GENERATED_DIR / img_name
+        img.save(img_path)
 
-        num_variants = random.randint(2, 4)
-        for v in range(num_variants):
-            aug_img, applied = augment_image(base_img.copy())
-            aug_name = f"{base_name}_aug{v}.jpg"
-            aug_path = AUGMENTED_DIR / aug_name
-            aug_img.save(aug_path, quality=random.randint(75, 95))
+        metadata.append({
+            "image": str(img_path),
+            "prompt": prompt,
+            "label": "generated",
+            "seed_prompt_source": "random",
+            "timestamp": datetime.now().isoformat(),
+        })
 
-            metadata.append({
-                "base_image": str(base_path),
-                "augmented_image": str(aug_path),
-                "prompt": prompt,
-                "label": "generated",
-                "augmentations": applied,
-                "variant": v,
-                "timestamp": datetime.now().isoformat(),
-            })
-
-        print(f"[OK] {base_name}: {num_variants} variants created")
+        print(f"[OK] {img_name} saved (pure, no augmentations)")
 
     ws.close()
 
@@ -712,8 +404,7 @@ def main():
             f.write(json.dumps(entry) + "\n")
 
     print(f"\n[DONE] Dataset created:")
-    print(f"  Base images: {len(list(GENERATED_DIR.glob('*.png')))}")
-    print(f"  Augmented images: {len(list(AUGMENTED_DIR.glob('*.jpg')))}")
+    print(f"  Images: {len(list(GENERATED_DIR.glob('*.png')))}")
     print(f"  Metadata: {METADATA_PATH}")
 
 if __name__ == "__main__":
