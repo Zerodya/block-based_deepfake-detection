@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import argparse
 import csv
+import json
+import math
 import os
 import re
 import subprocess
@@ -11,16 +13,77 @@ from pathlib import Path
 
 IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.bmp', '.webp', '.tif', '.tiff')
 
-# Regex per parsare l'output di single_test.py
-PRED_RE = re.compile(r'Prediction:\s*(DM|REAL)')
-PROBS_RE = re.compile(r'Probabilities:\s*DM=([\d.]+),\s*REAL=([\d.]+)')
-ECS_DM_RE = re.compile(r'Mean ECS DM:\s*([\d.]+)')
-ECS_REAL_RE = re.compile(r'Mean ECS REAL:\s*([\d.]+)')
-STABLE_RE = re.compile(r'Stable predictions:\s*(\d+)/(\d+)')
+# single_test.py writes a metrics.json per image and we read that. The previous
+# version scraped stdout with regexes, which silently dropped data: the ECS
+# patterns were `[\d.]+`, so any NEGATIVE consistency score - which the Pearson
+# definition produces routinely - matched nothing and was written to the CSV as
+# an empty string. Anti-correlated heatmaps were therefore invisible in every
+# batch summary ever produced.
 
-FIELDNAMES = ['image', 'filename', 'status', 'prediction',
-              'prob_dm', 'prob_real', 'mean_ecs_dm', 'mean_ecs_real',
-              'stable', 'elapsed_s', 'error']
+FIELDNAMES = [
+    'image', 'filename', 'status', 'prediction',
+    'prob_dm', 'prob_real',
+    'mean_ecs_dm', 'mean_ecs_real',
+    'n_degenerate_dm', 'n_degenerate_real',
+    'flip_r_dm', 'flip_r_real',
+    'attr_dm', 'attr_real', 'attr_residual',
+    'stable', 'elapsed_s', 'error',
+]
+
+
+def sanitize_filename(name):
+    """Must match single_test.py, which names each image's output folder."""
+    return re.sub(r'_+', '_', re.sub(r'[^\w\-.]', '_', name)).strip('_')
+
+
+def _fmt(value):
+    if value is None:
+        return ''
+    if isinstance(value, float):
+        return '' if math.isnan(value) else f'{value:.4f}'
+    return value
+
+
+def read_metrics(output_dir, image_path):
+    """Load the structured metrics single_test.py wrote for this image."""
+    folder = sanitize_filename(Path(image_path).stem)
+    path = Path(output_dir) / folder / 'metrics.json'
+    if not path.exists():
+        return None, f'metrics.json not found at {path}'
+    try:
+        with open(path) as f:
+            return json.load(f), None
+    except (OSError, ValueError) as exc:
+        return None, f'unreadable metrics.json: {exc}'
+
+
+def flatten_metrics(m):
+    """metrics.json -> one flat CSV row."""
+    row = {
+        'prediction': m.get('prediction', ''),
+        'prob_dm': _fmt(m.get('prob_dm')),
+        'prob_real': _fmt(m.get('prob_real')),
+    }
+
+    rob = m.get('robustness') or {}
+    for branch in ('dm', 'real'):
+        row[f'mean_ecs_{branch}'] = _fmt(rob.get(f'mean_ecs_{branch}'))
+        row[f'n_degenerate_{branch}'] = rob.get(f'n_degenerate_{branch}', '')
+    if rob:
+        row['stable'] = f"{rob.get('stable', '')}/{rob.get('n', '')}"
+
+    # V4: near +1 means the map follows the image; near 0 means a fixed prior.
+    flips = m.get('flip_equivariance') or {}
+    if flips:
+        stage = sorted(flips)[0]
+        for label, data in flips[stage].items():
+            row[f"flip_r_{label.split('-')[0].lower()}"] = _fmt(data.get('r'))
+
+    attribution = m.get('branch_attribution') or {}
+    row['attr_dm'] = _fmt(attribution.get('attr_dm'))
+    row['attr_real'] = _fmt(attribution.get('attr_real'))
+    row['attr_residual'] = _fmt(attribution.get('residual'))
+    return row
 
 
 def parse_args():
@@ -102,22 +165,13 @@ def run_single(script, models_dir, backbone, image_path, output_dir, timeout):
             return {'status': 'FAILED', 'elapsed_s': elapsed,
                     'error': (proc.stderr or stdout)[-500:]}
 
-        pred = PRED_RE.search(stdout)
-        probs = PROBS_RE.search(stdout)
-        ecs_dm = ECS_DM_RE.search(stdout)
-        ecs_real = ECS_REAL_RE.search(stdout)
-        stable = STABLE_RE.search(stdout)
+        metrics, err = read_metrics(output_dir, image_path)
+        if metrics is None:
+            return {'status': 'FAILED', 'elapsed_s': f'{elapsed:.1f}', 'error': err}
 
-        return {
-            'status': 'OK',
-            'elapsed_s': f'{elapsed:.1f}',
-            'prediction': pred.group(1) if pred else '',
-            'prob_dm': probs.group(1) if probs else '',
-            'prob_real': probs.group(2) if probs else '',
-            'mean_ecs_dm': ecs_dm.group(1) if ecs_dm else '',
-            'mean_ecs_real': ecs_real.group(1) if ecs_real else '',
-            'stable': f'{stable.group(1)}/{stable.group(2)}' if stable else '',
-        }
+        result = {'status': 'OK', 'elapsed_s': f'{elapsed:.1f}'}
+        result.update(flatten_metrics(metrics))
+        return result
     except subprocess.TimeoutExpired:
         return {'status': 'TIMEOUT', 'elapsed_s': f'{time.time() - t0:.1f}',
                 'error': f'killed after {timeout}s'}
