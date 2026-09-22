@@ -18,6 +18,7 @@ from dfx import (
     check_len,
     get_trans
 )
+from dfx.dataset_classes import TransformedSubset
 from dfx import training
 
 
@@ -38,6 +39,9 @@ def get_parser():
     parser.add_argument('-sch', '--scheduler', type=bool, default=False)
     parser.add_argument('-sch_step', '--scheduler_stepsize', type=int, default=10)
     parser.add_argument('-sch_g', '--scheduler_gamma', type=float, default=0.1)
+    parser.add_argument('--no_augment', action='store_true',
+                        help='Disable train-time augmentation. Use it to reproduce '
+                             'the original (shortcut-prone) numbers for comparison.')
 
     args = parser.parse_args()
     return args
@@ -51,7 +55,11 @@ def main(parser):
 
     batch_size = parser.batch_size
 
-    trans = get_trans(model_name=parser.backbone)
+    # Augmentation on train only. The random JPEG round trip in particular is
+    # what stops the model separating the classes on compression history rather
+    # than on content - see RandomJPEG in dfx.dataset_classes.
+    trans_train = get_trans(model_name=parser.backbone, train=not parser.no_augment)
+    trans_eval = get_trans(model_name=parser.backbone)
 
     dset = umbalanced_dataset(
         dset_dir=datasets_path,
@@ -59,11 +67,13 @@ def main(parser):
         guidance=guidance_path,
         for_overfitting=True,
         perc_to_take=0.50,
-        transforms=trans
+        transforms=trans_eval
     )
     check_len(dset, binary=True, return_perc=False)
 
     train, valid = random_split(dset, lengths=[.8, .2])
+    train = TransformedSubset(train, trans_train)
+    valid = TransformedSubset(valid, trans_eval)
 
     import platform
     if platform.system() == 'Darwin':  # macOS
