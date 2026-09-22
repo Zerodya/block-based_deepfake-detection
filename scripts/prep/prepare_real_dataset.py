@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""
-Estrae N immagini casuali da ImageNet, le croppa a 1024x1024
-e le salva in una directory di destinazione.
-
-python sample_imagenet.py -s /path/to/train -d ./mio_campione -n 1000
-"""
-
 import argparse
 import logging
 import random
@@ -14,6 +7,11 @@ from pathlib import Path
 from collections import defaultdict
 
 from PIL import Image
+
+# Shared with the generation pipeline so both halves of the dataset get an
+# identical crop policy, encoding and output format. See src/dfx/image_prep.py.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'src'))
+from dfx.image_prep import process_image
 
 # --- Configurazione logging ---
 logging.basicConfig(
@@ -76,44 +74,9 @@ def sample_images(images: list[Path], n: int, balanced: bool) -> list[Path]:
     return selected[:n]
 
 
-def process_image(src: Path, dst: Path, size: int, crop_mode: str, quality: int):
-    """
-    Apre l'immagine, la converte in RGB, fa resize se necessario,
-    croppa a size x size e salva in JPEG.
-    """
-    with Image.open(src) as img:
-        img = img.convert("RGB")
-        w, h = img.size
-
-        # Se troppo piccola, resize up mantenendo aspect ratio
-        # in modo che il lato più corto sia almeno 'size'
-        if w < size or h < size:
-            ratio = size / min(w, h)
-            new_w, new_h = int(w * ratio), int(h * ratio)
-            img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-
-        # Crop
-        w, h = img.size
-        if crop_mode == "center":
-            left = (w - size) // 2
-            top = (h - size) // 2
-        elif crop_mode == "random":
-            left = random.randint(0, max(0, w - size))
-            top = random.randint(0, max(0, h - size))
-        else:
-            raise ValueError(f"crop_mode non valido: {crop_mode}")
-
-        right = left + size
-        bottom = top + size
-        img = img.crop((left, top, right, bottom))
-
-        # Salva
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        img.save(dst, format="JPEG", quality=quality, optimize=True)
-
-
 def process_images(selected: list[Path], dest: Path, keep_structure: bool,
-                   root: Path, size: int, crop_mode: str, quality: int):
+                   root: Path, size: int, crop_mode: str, quality: int,
+                   jpeg_history: bool = True):
     dest.mkdir(parents=True, exist_ok=True)
     logger.info(f"Processing di {len(selected)} immagini -> {dest}")
 
@@ -139,7 +102,8 @@ def process_images(selected: list[Path], dest: Path, keep_structure: bool,
                 counter += 1
 
         try:
-            process_image(src, dst, size, crop_mode, quality)
+            process_image(src, dst, size=size, crop_mode=crop_mode,
+                          quality=quality, jpeg_history=jpeg_history)
             ok += 1
         except Exception as e:
             logger.error(f"Errore processando {src}: {e}")
@@ -179,8 +143,10 @@ def main():
         help="Dimensione crop (default: 1024)"
     )
     parser.add_argument(
-        "--crop-mode", choices=["center", "random"], default="center",
-        help="Modalità crop: center o random (default: center)"
+        "--crop-mode", choices=["center", "random"], default="random",
+        help="Modalita' crop (default: random). 'center' keeps any watermark or "
+             "caption in the same place in every image, which is itself a "
+             "positional shortcut the detector can learn."
     )
     parser.add_argument(
         "--quality", type=int, default=95,
@@ -190,6 +156,12 @@ def main():
         "--ext", nargs="+",
         default=[".jpeg", ".jpg", ".JPEG", ".JPG"],
         help="Estensioni da considerare"
+    )
+    parser.add_argument(
+        "--no-jpeg-history", action="store_true",
+        help="Skip the randomised prior JPEG generation. Both halves of the "
+             "dataset must use the same setting, or compression history alone "
+             "separates the classes."
     )
     parser.add_argument(
         "--seed", type=int, default=None,
@@ -206,7 +178,8 @@ def main():
     selected = sample_images(images, args.n, args.balanced)
     process_images(
         selected, args.dest, args.keep_structure, args.src,
-        args.size, args.crop_mode, args.quality
+        args.size, args.crop_mode, args.quality,
+        jpeg_history=not args.no_jpeg_history
     )
 
     logger.info("Fatto!")

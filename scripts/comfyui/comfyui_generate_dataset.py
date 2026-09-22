@@ -9,6 +9,12 @@ from pathlib import Path
 from datetime import datetime
 from PIL import Image
 import websocket
+import sys
+
+# Same encoder the real half of the dataset goes through, so compression
+# history, crop policy and output format cannot separate the two classes.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'src'))
+from dfx.image_prep import process_image
 
 # ========================= CONFIGURATION =========================
 COMFYUI_URL = "http://127.0.0.1:8188"
@@ -24,15 +30,43 @@ METADATA_PATH = DATASET_DIR / "metadata.jsonl"
 # How many images to generate
 NUM_IMAGES = 5000
 
-# Image dimensions
+# Image dimensions. Defaults for the workflow template; each image draws its
+# own values from RESOLUTIONS below.
 WIDTH = 1024
 HEIGHT = 1024
 
-# ComfyUI KSampler settings
+# ComfyUI KSampler defaults for the workflow template.
 SAMPLER_STEPS = 30
 SAMPLER_CFG = 7.5
 SAMPLER_NAME = "euler_ancestral"
 SAMPLER_SCHEDULER = "normal"
+
+# ---------------------------------------------------------------------------
+# Generation diversity
+# ---------------------------------------------------------------------------
+# Every image used to be produced with exactly the same sampler, step count, CFG
+# and resolution. That gives the whole generated half of the dataset one shared
+# low-level signature, which a detector can pick up instead of learning anything
+# about diffusion artifacts in general - and which will not transfer to images
+# from any other generator. Sampling these per image widens the distribution the
+# detector has to cover.
+RESOLUTIONS = [(1024, 1024), (1152, 896), (896, 1152), (1216, 832), (832, 1216)]
+STEP_CHOICES = [20, 25, 30, 35, 40, 50]
+CFG_CHOICES = [5.0, 6.0, 7.0, 7.5, 8.0, 9.0]
+SAMPLER_CHOICES = ["euler", "euler_ancestral", "dpmpp_2m", "dpmpp_2m_sde", "ddim"]
+SCHEDULER_CHOICES = ["normal", "karras", "exponential"]
+
+# Output encoding. MUST match what scripts/prep/prepare_real_dataset.py writes
+# for the real half, or the two classes become separable by compression history
+# alone. Both go through dfx.image_prep.process_image.
+OUTPUT_SIZE = 1024
+OUTPUT_QUALITY = 95
+OUTPUT_FORMAT = "JPEG"
+# Randomised prior JPEG generation, applied to the generated half as well.
+# Real photographs arrive already compressed and renders do not, and that
+# difference alone is enough to separate the classes. Must match the setting
+# used by scripts/prep/prepare_real_dataset.py.
+OUTPUT_JPEG_HISTORY = True
 
 # ========================= DIVERSE PROMPTS =========================
 PROMPTS = [
@@ -207,9 +241,23 @@ def build_workflow():
         }
     }
 
-def patch_workflow(workflow, positive_prompt, seed):
-    """Patch a workflow with new prompt and seed."""
+def sample_settings(rng):
+    """Draw the per-image generation settings."""
+    w, h = rng.choice(RESOLUTIONS)
+    return {
+        "width": w,
+        "height": h,
+        "steps": rng.choice(STEP_CHOICES),
+        "cfg": rng.choice(CFG_CHOICES),
+        "sampler_name": rng.choice(SAMPLER_CHOICES),
+        "scheduler": rng.choice(SCHEDULER_CHOICES),
+    }
+
+
+def patch_workflow(workflow, positive_prompt, seed, settings=None):
+    """Patch a workflow with a new prompt, seed and per-image settings."""
     wf = json.loads(json.dumps(workflow))
+    settings = settings or {}
 
     prompt_patched = False
     seed_patched = False
@@ -227,6 +275,14 @@ def patch_workflow(workflow, positive_prompt, seed):
             if not seed_patched:
                 node["inputs"]["seed"] = seed
                 seed_patched = True
+            for key in ("steps", "cfg", "sampler_name", "scheduler"):
+                if key in settings:
+                    node["inputs"][key] = settings[key]
+
+        if node.get("class_type") == "EmptyLatentImage":
+            for key in ("width", "height"):
+                if key in settings:
+                    node["inputs"][key] = settings[key]
 
     if not prompt_patched:
         for node in wf.values():
@@ -303,11 +359,11 @@ def get_image(filename, subfolder="", folder_type="output"):
     resp.raise_for_status()
     return Image.open(io.BytesIO(resp.content)).convert("RGB")
 
-def generate_image(prompt, idx, workflow_template, ws):
-    """Generate an image via ComfyUI and return PIL Image (pure, no augmentations)."""
+def generate_image(prompt, idx, workflow_template, ws, settings=None, seed=None):
+    """Generate an image via ComfyUI and return (PIL Image, settings, seed)."""
     print(f"[GEN {idx:04d}/{NUM_IMAGES}] {prompt[:60]}...")
-    seed = random.randint(1, 2**32 - 1)
-    workflow = patch_workflow(workflow_template, prompt, seed)
+    seed = random.randint(1, 2**32 - 1) if seed is None else seed
+    workflow = patch_workflow(workflow_template, prompt, seed, settings)
 
     try:
         prompt_id = queue_prompt(workflow)
@@ -375,27 +431,44 @@ def main():
     workflow_template = build_workflow()
     metadata = []
 
+    rng = random.Random()
+
     for i in range(NUM_IMAGES):
         # Prompt chosen purely at random (with replacement) for each image
         prompt = random.choice(PROMPTS)
+        settings = sample_settings(rng)
+        seed = rng.randint(1, 2**32 - 1)
 
-        img = generate_image(prompt, i, workflow_template, ws)
+        img = generate_image(prompt, i, workflow_template, ws, settings, seed)
         if img is None:
             continue
 
-        img_name = f"gen_{i:04d}.png"
+        # Written through the SAME encoder as the real half. Saving a lossless
+        # PNG here is what previously made every generated image trivially
+        # distinguishable from every (JPEG-sourced) real one.
+        ext = 'jpg' if OUTPUT_FORMAT.upper() == 'JPEG' else OUTPUT_FORMAT.lower()
+        img_name = f"gen_{i:04d}.{ext}"
         img_path = GENERATED_DIR / img_name
-        img.save(img_path)
+        process_image(img, img_path, size=OUTPUT_SIZE, crop_mode='center',
+                      quality=OUTPUT_QUALITY, image_format=OUTPUT_FORMAT, rng=rng,
+                      jpeg_history=OUTPUT_JPEG_HISTORY)
 
         metadata.append({
             "image": str(img_path),
             "prompt": prompt,
             "label": "generated",
             "seed_prompt_source": "random",
+            "seed": seed,
+            "settings": settings,
+            "output_format": OUTPUT_FORMAT,
+            "output_quality": OUTPUT_QUALITY,
+            "jpeg_history": OUTPUT_JPEG_HISTORY,
             "timestamp": datetime.now().isoformat(),
         })
 
-        print(f"[OK] {img_name} saved (pure, no augmentations)")
+        print(f"[OK] {img_name} saved  "
+              f"({settings['width']}x{settings['height']}, {settings['steps']} steps, "
+              f"cfg {settings['cfg']}, {settings['sampler_name']})")
 
     ws.close()
 
@@ -404,7 +477,7 @@ def main():
             f.write(json.dumps(entry) + "\n")
 
     print(f"\n[DONE] Dataset created:")
-    print(f"  Images: {len(list(GENERATED_DIR.glob('*.png')))}")
+    print(f"  Images: {len(list(GENERATED_DIR.glob('*.*')))}")
     print(f"  Metadata: {METADATA_PATH}")
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ from dfx import (
     mydataset,
     get_trans
 )
+from dfx.dataset_classes import TransformedSubset
 from dfx import training
 
 if torch.cuda.is_available():
@@ -84,7 +85,8 @@ class CompleteModel2Blocks(nn.Module):
         for p in self.real_extractor.parameters():
             p.requires_grad = False
         
-        dummy = torch.randn(1, 3, 224, 224).to(dev)
+        # 256 is what get_trans() produces for every non-ViT backbone.
+        dummy = torch.randn(1, 3, 256, 256).to(dev)
         with torch.no_grad():
             feat_dm   = self.dm_extractor(dummy)
             feat_real = self.real_extractor(dummy)
@@ -152,6 +154,9 @@ def get_parser():
     parser.add_argument('-sch', '--scheduler', type=bool, default=False)
     parser.add_argument('-sch_step', '--scheduler_stepsize', type=int, default=10)
     parser.add_argument('-sch_g', '--scheduler_gamma', type=float, default=0.1)
+    parser.add_argument('--no_augment', action='store_true',
+                        help='Disable train-time augmentation. Use it to reproduce '
+                             'the original (shortcut-prone) numbers for comparison.')
 
     args = parser.parse_args()
     return args
@@ -159,13 +164,17 @@ def get_parser():
 
 # ==================== MAIN ====================
 def main(parser):
-    datasets_path = get_path('dataset') if parser.datasets_dir is not None else parser.datasets_dir
-    guidance_path = get_path('guidance') if parser.guidance_dir is not None else parser.guidance_dir
-    models_dir = get_path('models') if parser.saving_dir is not None else parser.saving_dir
+    # These three ternaries used to be inverted: passing --datasets_dir made the
+    # script use get_path('dataset') and ignore the flag, while omitting it
+    # yielded None. Matches training-base_model.py now.
+    datasets_path = parser.datasets_dir if parser.datasets_dir is not None else get_path('dataset')
+    guidance_path = parser.guidance_dir if parser.guidance_dir is not None else get_path('guidance')
+    models_dir = parser.saving_dir if parser.saving_dir is not None else get_path('models')
 
     os.makedirs(models_dir + '/complete', exist_ok=True)
 
     batch_size = parser.batch_size
+    trans_train = get_trans(model_name=parser.backbone, train=not parser.no_augment)
     trans = get_trans(model_name=parser.backbone)
     
     guidance = None if parser.no_guidance else guidance_path
@@ -207,6 +216,8 @@ def main(parser):
     
     # --- Split train/valid per 2 classi ---
     train, valid = make_train_valid_2class(dset=dset, validation_ratio=0.2)
+    train = TransformedSubset(train, trans_train)
+    valid = TransformedSubset(valid, trans)
     print(f"Train: {len(train)}, Valid: {len(valid)}")
 
     # --- Loss a 2 classi ---

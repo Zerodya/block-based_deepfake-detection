@@ -233,18 +233,96 @@ def make_binary(testing_dset):
   test_dset = Subset(testing_dset, index_list)
   return test_dset
 
-def get_trans(model_name:str):
+class TransformedSubset(Dataset):
+  """A Subset that applies its own transform, overriding the parent dataset's.
+
+  Needed because the datasets here take one transform at construction and the
+  train/valid split happens afterwards, so both halves would otherwise share it.
+  Augmenting the validation set would make the validation metric measure the
+  augmentation rather than the model.
+
+  This cannot be solved by building two dataset objects instead: umbalanced_dataset
+  draws the non-main classes with random.sample, so two instances would not even
+  contain the same files.
+  """
+  def __init__(self, subset, transforms):
+    self.subset = subset
+    self.transforms = transforms
+
+  def __len__(self):
+    return len(self.subset)
+
+  def __getitem__(self, i):
+    base = self.subset.dataset
+    item = base.files[self.subset.indices[i]]
+    img = Image.open(item['file']).convert('RGB')
+    return (self.transforms(img),
+            torch.tensor(item['class_mod']),
+            torch.tensor(item['class_arch']))
+
+
+class RandomJPEG:
+  """Re-encode through JPEG at a random quality, applied to BOTH classes.
+
+  This is the augmentation that matters most here. The real half of the dataset
+  comes from JPEG sources and the generated half was written losslessly, so a
+  detector could separate the two on compression artifacts alone, without ever
+  looking at content - and a cue that is global and spatially uniform leaves a
+  saliency map with nothing to point at. Putting every image through the same
+  random JPEG round trip removes that shortcut at training time.
+  """
+  def __init__(self, qmin=70, qmax=95, p=0.9):
+    self.qmin, self.qmax, self.p = qmin, qmax, p
+
+  def __call__(self, img):
+    import io
+    if random.random() > self.p:
+      return img
+    buffer = io.BytesIO()
+    img.convert('RGB').save(buffer, format='JPEG',
+                            quality=random.randint(self.qmin, self.qmax))
+    buffer.seek(0)
+    return Image.open(buffer).convert('RGB')
+
+  def __repr__(self):
+    return f'{type(self).__name__}(q=[{self.qmin},{self.qmax}], p={self.p})'
+
+
+def get_trans(model_name:str, train:bool=False):
+    """Preprocessing pipeline.
+
+    `train=True` adds augmentation; the default keeps the exact deterministic
+    eval pipeline every existing script relies on, so callers that do not pass
+    the flag are unaffected.
+
+    IMPORTANT: the explainability scripts import this function rather than
+    defining their own resize. They previously used 224 while training used 256,
+    which put the models off their training distribution and shrank the
+    attribution grid from 8x8 to 7x7 - silently, because the feature extractor
+    keeps its global average pool and therefore returns the same feature width
+    at any input size.
+    """
+    normalize = T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+
+    if train:
+        steps = [
+            RandomJPEG(qmin=70, qmax=95, p=0.9),
+            T.RandomResizedCrop((256, 256), scale=(0.6, 1.0), ratio=(0.85, 1.18)),
+            T.RandomHorizontalFlip(p=0.5),
+        ]
+        if model_name.startswith('vit'):
+            steps.append(T.CenterCrop((224, 224)))
+        return T.Compose(steps + [T.ToTensor(), normalize])
+
     if model_name.startswith('vit'):
-        trans = T.Compose([
+        return T.Compose([
             T.Resize((256, 256)),
-            T.CenterCrop((224,224)),
+            T.CenterCrop((224, 224)),
             T.ToTensor(),
-            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            normalize
         ])
-    else:
-        trans = T.Compose([
-            T.Resize((256, 256)),
-            T.ToTensor(),
-            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
-    return trans
+    return T.Compose([
+        T.Resize((256, 256)),
+        T.ToTensor(),
+        normalize
+    ])

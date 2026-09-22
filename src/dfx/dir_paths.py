@@ -1,5 +1,15 @@
 import os
-from .wd import working_dir
+
+# `wd.py` holds the machine-specific working directory and is gitignored, so it
+# is absent from a fresh clone. Importing it unconditionally made `import dfx`
+# fail outright on any new checkout - including on an inference-only machine
+# that never needs these paths, because every script passes --models_dir and
+# --dataset_dir explicitly. Fall back to an env var, then to the CWD.
+try:
+    from .wd import working_dir
+except ImportError:
+    working_dir = os.environ.get('DFX_WORKING_DIR', os.getcwd())
+
 
 def get_path(dir: str):
 
