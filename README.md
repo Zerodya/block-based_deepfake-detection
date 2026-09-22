@@ -61,6 +61,19 @@ working_dir/
     ```
     This will take 5000 random images from that dataset, crop them to 1024x1024 and save them in the working_dir.
 
+    Both halves of the dataset go through the same encoder (`src/dfx/image_prep.py`):
+    same crop policy, same output format, and the same randomised prior JPEG
+    generation. That last part is the one that matters. Real photographs arrive
+    already compressed and fresh renders do not, and matching only the output
+    format leaves that difference intact: on a controlled pair where the content
+    was identical by construction, matching the format alone still left a
+    global-statistics probe at 100% accuracy, while giving both classes a
+    matched randomised JPEG history dropped it to 74%. The crop defaults to
+    `random` for the same reason - a centre crop keeps an ImageNet watermark in
+    the same corner of every image, which is a positional shortcut of its own.
+    Use `--no-jpeg-history` on **both** scripts to reproduce the original
+    (shortcut-prone) dataset.
+
   2. Install [ComfyUI](https://comfy.org/) to generate pictures.
 
   - 2a. Create a new ComfyUI project. 
@@ -72,7 +85,11 @@ working_dir/
     ```py
     python scripts/comfyui/comfyui_generate_dataset.py \
     ```
-    This will generate 5000 pictures with a size of 1024x1024 following random prompts and modifications. 
+    This generates 5000 images. Resolution, step count, CFG scale, sampler and
+    scheduler are drawn per image rather than fixed, so the generated half does
+    not carry one shared sampler signature that a detector can memorise instead
+    of learning about diffusion artifacts in general. Output encoding is shared
+    with the real pipeline, as described above.
 
   3. Your data should follow this structure:
   ```
@@ -88,7 +105,10 @@ working_dir/
   ```
 
 ### Train Base Models
-Train the three base models:
+Train the base models (this fork uses two: `dm_generated` and `real`).
+Augmentation is on by default and includes a random JPEG round trip applied to
+both classes, which stops the model separating them on compression history;
+pass `--no_augment` to reproduce the original numbers for comparison.
 ```{python}
 python scripts/training/training-base_model.py --datasets_dir <path/to/datasets/> --main_class <main> --saving_dir <path/to/outputs> --backbone <backbone>
 ```
@@ -118,15 +138,55 @@ python scripts/testing/testing_complete-models.py --backbone <backbone_type> --m
 ```
 
 ### Explainability
-Compare heatmaps before/after post-processing using Grad-CAM and Score-CAM.
 
-Test a single image in the dataset:
+Attribution maps for the complete model, plus the diagnostics needed to judge
+whether those maps mean anything.
+
+**Read this before interpreting any map.** For a `layer4 -> GAP -> Linear` head,
+the gradient of the logit with respect to the layer4 activations is
+
+```
+d logit_k / d A_cij = w_kc / (HW)
+```
+
+which is constant in space and independent of the image. A last-layer CAM is
+therefore a *fixed linear projection* of the activation tensor (this is the CAM
+of Zhou et al., and the equivalence is noted in the Grad-CAM paper itself for
+GAP+FC networks). Three consequences:
+
+- Last-layer maps look similar across images by construction, and a high
+  consistency score at layer4 is analytically forced rather than evidence of a
+  stable explanation.
+- HiResCAM is *identical* to Grad-CAM at layer4 here; Grad-CAM++ is a different
+  but still spatially-constant reweighting. No CAM variant helps at layer4.
+- Genuine spatial attribution comes from `--stages layer3` and from the
+  input-space methods `--occlusion` and `--integrated_gradients`.
+
+`src/dfx/cam.py` holds the single implementation of all of these.
+
+**Step 0 - the sanity gate.** Run this first; nothing else is interpretable
+until it passes. It runs the same code on an ImageNet-pretrained resnet50 with a
+known class, so if the map does not land on the object the bug is in the
+attribution code rather than in the detector.
+```
+python scripts/explainability/single_test.py --sanity \
+          --models_dir . --backbone resnet50 --image_path "<a_photo>"
+```
+
+Test a single image:
 ```
 python scripts/explainability/single_test.py \
           --models_dir <your_models_dir> \
           --backbone <backbone_type> \
-          --image_path "<your_image_path>"
+          --image_path "<your_image_path>" \
+          --stages layer3,layer4 --occlusion --integrated_gradients
 ```
+Each run writes `metrics.json` (map statistics, flip-equivariance, branch
+attribution, consistency scores), `maps.npz` with the raw float maps, and
+figures including a *signed* map with a colorbar on the true, unnormalised value
+range - min-max normalisation is what lets a map whose dynamic range is 1e-6
+look like a confident explanation.
+
 Test a subset of images:
 ```
 python scripts/explainability/batch_test.py \
@@ -135,6 +195,34 @@ python scripts/explainability/batch_test.py \
           --dataset_dir "<your_dataset_dir>" \
           --num_images 100
 ```
+
+**Is the map an explanation or a fixed spatial prior?**
+```
+python scripts/explainability/diagnose_prior.py \
+          --models_dir <your_models_dir> \
+          --backbone <backbone_type> \
+          --dataset_dir "<your_dataset_dir>" --n 200
+```
+Seven tests: the analytic gradient check above, flip equivariance, the shared
+mean map and how much variance it explains, content-free inputs, deletion-AUC
+faithfulness against that mean map, cascading model randomisation (Adebayo et
+al., NeurIPS 2018), and an **untrained-model null control** for the consistency
+score. That last one matters most: if randomly initialised weights score as
+highly as the trained model, the consistency score measures nothing the model
+learned, and it should be reported next to every consistency figure.
+
+### Auditing the dataset for shortcuts
+A flat attribution map is the *correct* answer when the classes are separable by
+a global statistic, because then there is no region to point at. This quantifies
+that directly, without training anything:
+```
+python scripts/prep/shortcut_audit.py --dataset_dir <path/to/datasets/>
+```
+It reports the accuracy of classifiers denied the intended cue: container and
+JPEG quantisation metadata only (no pixels read), ~16 global statistics, 32x32
+thumbnails (high frequencies destroyed), and noise residuals (content removed).
+Any probe near 0.90 or above means the headline accuracy does not measure
+diffusion-artifact detection.
 
 Expected model paths example:
 - `models_dir/unbalancing-approach/dm_generated/res50.pt`
